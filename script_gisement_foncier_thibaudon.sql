@@ -12,8 +12,8 @@
 -- Cela permet d'isoler nos tables de travail et de ne pas polluer le schéma de référence.
 -- C'est une "bonne pratique" essentielle : on ne touche jamais aux données sources.
 --- On utilise CASCADE pour supprimer toutes les tables dépendantes si le schéma existe déjà.
-DROP SCHEMA IF EXISTS arthur_td CASCADE;
-CREATE SCHEMA arthur_td;
+DROP SCHEMA IF EXISTS gst_arthur CASCADE;
+CREATE SCHEMA gst_arthur;
 
 --------------------------------------------------------------------------------
 -- ETAPE 0 : DÉFINITION DE LA ZONE D'ÉTUDE (AOI - Area of Interest)
@@ -21,8 +21,8 @@ CREATE SCHEMA arthur_td;
 -- Détermination de l’emprise du territoire d’identification du gisement
 -- Selection de l'EPCI CA Porte de l'Isère (CAPI) avec son code epci.
 -- Note : Le code EPCI est une chaîne de caractères, d'où l'usage des guillemets simples.
-DROP TABLE IF EXISTS arthur_td.communes_epci_capi;
-CREATE TABLE arthur_td.communes_epci_capi AS
+DROP TABLE IF EXISTS gst_arthur.communes_epci_capi;
+CREATE TABLE gst_arthur.communes_epci_capi AS
 
 SELECT * FROM geonum_reference.commune
 WHERE epci LIKE '243800604';
@@ -36,8 +36,8 @@ WHERE epci LIKE '243800604';
 -- LOGIQUE MÉTIER :
 -- 1. Petits bâtiments (<50m²) : Souvent des annexes ou garages. On garde juste une marge technique (2m).
 -- 2. Gros bâtiments (>=50m²) : Bâtiments principaux. On applique une règle d'urbanisme stricte (recul de 50m).
-DROP TABLE IF EXISTS arthur_td.masque_batiment;
-CREATE TABLE arthur_td.masque_batiment AS
+DROP TABLE IF EXISTS gst_arthur.masque_batiment;
+CREATE TABLE gst_arthur.masque_batiment AS
 
 SELECT ST_Union(
     ST_Intersection(
@@ -52,7 +52,7 @@ SELECT ST_Union(
     )
 ) AS geom
 FROM geonum_reference.bdtopo_batiment AS bat
-JOIN arthur_td.communes_epci_capi AS com
+JOIN gst_arthur.communes_epci_capi AS com
   ON ST_Intersects(bat.geom, com.geom);
 
 -- L'utilisation de ST_Union est CRUCIALE ici : elle fusionne tous les tampons (buffers) qui se chevauchent
@@ -65,16 +65,16 @@ JOIN arthur_td.communes_epci_capi AS com
 -- Voirie principale/Rail : 15m de recul.
 -- Voirie secondaire : 7m de recul.
 -- Supprime la table 'masque_infra' si elle existe afin de pouvoir recréer la table proprement
-DROP TABLE IF EXISTS arthur_td.masque_infra;
+DROP TABLE IF EXISTS gst_arthur.masque_infra;
 
--- Création de la nouvelle table 'masque_infra' dans l'espace de noms 'arthur_td'
-CREATE TABLE arthur_td.masque_infra AS
+-- Création de la nouvelle table 'masque_infra' dans l'espace de noms 'gst_arthur'
+CREATE TABLE gst_arthur.masque_infra AS
 
 -- Définition d'une zone d'étude unique appelée 'zone_etude' en utilisant une CTE (WITH)
 WITH zone_etude AS (
     -- Fusionne toutes les géométries des communes constituant la CAPI en une géométrie unique
     SELECT ST_Union(geom) AS geom
-    FROM arthur_td.communes_epci_capi
+    FROM gst_arthur.communes_epci_capi
 )
 
 -- Construction finale de la géométrie résultat
@@ -119,63 +119,63 @@ FROM (
 -- Création du masque des équipements et des spécificités du territoire.
 -- On récupère les zones qui ne sont PAS des parcelles privées constructibles
 -- (cimetières, stades, parcs, aérodromes, zones industrielles, écoles existantes).
-DROP TABLE IF EXISTS arthur_td.masque_equipement;
-CREATE TABLE arthur_td.masque_equipement AS
+DROP TABLE IF EXISTS gst_arthur.masque_equipement;
+CREATE TABLE gst_arthur.masque_equipement AS
 
 SELECT ST_Union(geom) AS geom FROM (
     --1. Zones d'activités
     SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
     FROM geonum_reference.bdtopo_zone_d_activite_ou_d_interet
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM arthur_td.communes_epci_capi))
+    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <--- ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --2. Aérodromes
     SELECT ST_Force2D(ST_Buffer(ST_Multi(geom),100))::geometry(MultiPolygon, 2154) AS geom
     FROM geonum_reference.bdtopo_aerodrome
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM arthur_td.communes_epci_capi))
+    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <---  ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --3. Cimetières
     SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
     FROM geonum_reference.bdtopo_cimetiere
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM arthur_td.communes_epci_capi))
+    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <---  ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --4. Centres sportifs (Surface seulement)
     SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
     FROM geonum_reference.osm_sport_center
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM arthur_td.communes_epci_capi))
+    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <---  ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --5. Parcs
     SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
     FROM geonum_reference.osm_park
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM arthur_td.communes_epci_capi))
+    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <--- ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --6. Eau
     SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
     FROM geonum_reference.osm_water
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM arthur_td.communes_epci_capi))
+    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <---  ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     -- 7. Ecoles (OSM) avec buffer 50m
     SELECT ST_Multi(ST_Buffer(ST_Force2D(geom), 50))::geometry(MultiPolygon, 2154) AS geom
     FROM geonum_reference.osm_school
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM arthur_td.communes_epci_capi))
+    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <--- ne prend pas les points
 
     UNION ALL
     -- 8. Poste de transformation électrique (OSM) avec buffer 50m
     SELECT ST_Multi(ST_Buffer(ST_Force2D(geom), 50))::geometry(MultiPolygon, 2154) AS geom
     FROM geonum_reference.osm_school
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM arthur_td.communes_epci_capi))
+    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <--- ne prend pas les points
 ) equipements;
 
@@ -188,11 +188,15 @@ SELECT ST_Union(geom) AS geom FROM (
 --------------------------------------------------------------------------------
 -- Identification des parcelles candidates.
 -- On ne garde que les parcelles cadastrales qui touchent sont dans notre territoire.
-DROP TABLE IF EXISTS arthur_td.parcelles_candidates;
+DROP TABLE IF EXISTS gst_arthur.parcelles_candidates;
 
-CREATE TABLE arthur_td.parcelles_candidates AS
+CREATE TABLE gst_arthur.parcelles_candidates AS
 
 SELECT DISTINCT p.*  -- DISTINCT pour éviter les doublons si une parcelle intersecte plusieurs communes
 FROM geonum_reference.parcelles AS p
-JOIN arthur_td.communes_epci_capi AS c
+JOIN gst_arthur.communes_epci_capi AS c
 ON ST_Intersects(p.geom, c.geom);  -- Condition de jointure spatiale basique
+
+--------------------------------------------------------------------------------
+-- ETAPE 5 : TACHES URBAINES
+--------------------------------------------------------------------------------
