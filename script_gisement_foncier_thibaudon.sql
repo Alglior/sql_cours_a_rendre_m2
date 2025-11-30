@@ -39,7 +39,7 @@ WHERE epci LIKE '243800604';
 DROP TABLE IF EXISTS gst_arthur.masque_batiment;
 CREATE TABLE gst_arthur.masque_batiment AS
 
-SELECT ST_Union(
+SELECT (ST_Dump(ST_Union(
     ST_Intersection(
         ST_Buffer(
             bat.geom,
@@ -50,13 +50,10 @@ SELECT ST_Union(
         ),
         com.geom -- intersect avec commune geometry
     )
-) AS geom
+))).geom::geometry(Polygon, 2154) AS geom
 FROM geonum_reference.bdtopo_batiment AS bat
 JOIN gst_arthur.communes_epci_capi AS com
   ON ST_Intersects(bat.geom, com.geom);
-
--- L'utilisation de ST_Union est CRUCIALE ici : elle fusionne tous les tampons (buffers) qui se chevauchent
--- en une seule géométrie géante (MultiPolygon). Cela évite de compter plusieurs fois la même surface.
 
 --------------------------------------------------------------------------------
 -- ETAPE 2 : CONTRAINTES LIÉES AUX INFRASTRUCTURES LINÉAIRES
@@ -82,10 +79,10 @@ SELECT
     -- Calcul de l'intersection spatiale entre :
     -- 1) L'union de tous les tampons (buffer) générés autour des routes et rails
     -- 2) La zone d'étude (CAPI) pour limiter le masque aux limites géographiques exactes
-    ST_Intersection(
+    (ST_Dump(ST_Intersection(
         ST_Union(sub.geom),        -- Fusionne toutes les géométries tamponnées entre routes et rails
         (SELECT geom FROM zone_etude) -- Géométrie unique de la CAPI pour découpage final
-    ) AS geom
+    ))).geom::geometry(Polygon, 2154) AS geom
 FROM (
     -- Bloc A : Calcul des tampons pour les routes
     SELECT
@@ -122,66 +119,62 @@ FROM (
 DROP TABLE IF EXISTS gst_arthur.masque_equipement;
 CREATE TABLE gst_arthur.masque_equipement AS
 
-SELECT ST_Union(geom) AS geom FROM (
+SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
     --1. Zones d'activités
-    SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
+    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.bdtopo_zone_d_activite_ou_d_interet
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <--- ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --2. Aérodromes
-    SELECT ST_Force2D(ST_Buffer(ST_Multi(geom),100))::geometry(MultiPolygon, 2154) AS geom
+    SELECT ST_Force2D(ST_Buffer(geom,100))::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.bdtopo_aerodrome
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <---  ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --3. Cimetières
-    SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
+    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.bdtopo_cimetiere
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <---  ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --4. Centres sportifs (Surface seulement)
-    SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
+    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.osm_sport_center
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <---  ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --5. Parcs
-    SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
+    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.osm_park
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <--- ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     --6. Eau
-    SELECT ST_Force2D(ST_Multi(geom))::geometry(MultiPolygon, 2154) AS geom
+    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.osm_water
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <---  ne prend pas les points s'il y a des zones ponctuelles
 
     UNION ALL
     -- 7. Ecoles (OSM) avec buffer 50m
-    SELECT ST_Multi(ST_Buffer(ST_Force2D(geom), 50))::geometry(MultiPolygon, 2154) AS geom
+    SELECT ST_Buffer(ST_Force2D(geom), 50)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.osm_school
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <--- ne prend pas les points
 
     UNION ALL
     -- 8. Poste de transformation électrique (OSM) avec buffer 50m
-    SELECT ST_Multi(ST_Buffer(ST_Force2D(geom), 50))::geometry(MultiPolygon, 2154) AS geom
+    SELECT ST_Buffer(ST_Force2D(geom), 50)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.osm_school
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_arthur.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- <--- ne prend pas les points
 ) equipements;
-
-
--- Note Technique : ST_Force2D et ST_Multi assurent que toutes les géométries
--- ont le même format pour pouvoir être fusionnées (pas de mélange 2D/3D ou Polygon/MultiPolygon).
 
 --------------------------------------------------------------------------------
 -- ETAPE 4 : SÉLECTION DU FONCIER BRUT (PARCELLES)
