@@ -95,7 +95,7 @@ FROM (
                 ELSE 7
             END
         ) AS geom
-    FROM geonum_reference.osm_road r
+    FROM geonum_reference.osm_road AS r
     -- Jointure spatiale pour ne garder que les routes intersectant la zone d'étude
     JOIN zone_etude z ON ST_Intersects(r.geom, z.geom)
 
@@ -179,17 +179,71 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
 --------------------------------------------------------------------------------
 -- ETAPE 4 : SÉLECTION DU FONCIER BRUT (PARCELLES)
 --------------------------------------------------------------------------------
--- Identification des parcelles candidates.
+-- Identification des parcelles candidates grâce au zonage d'urbanisme en vigueur.
 -- On ne garde que les parcelles cadastrales qui touchent sont dans notre territoire.
+-- On ajoute aux données d'urbanisme la tâche urbaine pour pallier au problème que
+-- certaines communes n'ont pas de données (Eclose-Badinieres et Vaulx-Milieu)
+
 DROP TABLE IF EXISTS gst_arthur.parcelles_candidates;
 
 CREATE TABLE gst_arthur.parcelles_candidates AS
 
-SELECT DISTINCT p.*  -- DISTINCT pour éviter les doublons si une parcelle intersecte plusieurs communes
-FROM geonum_reference.parcelles AS p
+SELECT zu.*
+FROM geonum_reference.zonage_urbanisme AS zu
 JOIN gst_arthur.communes_epci_capi AS c
-ON ST_Intersects(p.geom, c.geom);  -- Condition de jointure spatiale basique
+ON ST_Intersects(zu.geom, c.geom)
+WHERE typezone IN('U', 'AUc', 'AUs'); -- Condition de jointure spatiale basique
 
 --------------------------------------------------------------------------------
--- ETAPE 5 : TACHES URBAINES
+-- ETAPE 5 : IDENTIFICATION DU GISEMENT NON BATI
 --------------------------------------------------------------------------------
+-- On retire des parcelles candidates toutes les zones bâties, présentant des infrastructures ou équipements
+-- On observe le résultat non nettoyé
+-- on utilise st_difference
+
+DROP TABLE IF EXISTS gst_arthur.masque_total; -- Création d'une table contenant tous les masques
+CREATE TABLE gst_arthur.masque_total AS
+
+SELECT ST_Union(geom) AS geom -- Fusion de l'ensemble des géométries de masque
+FROM (
+    SELECT geom
+    FROM gst_arthur.masque_batiment
+    UNION ALL
+    SELECT geom
+    FROM gst_arthur.masque_infra
+	UNION ALL
+	SELECT geom
+	FROM gst_arthur.masque_equipement
+) AS s;
+
+DROP TABLE IF EXISTS gst_arthur.gnb_brut;
+CREATE TABLE gst_arthur.gnb_brut AS
+
+SELECT 
+    p.gid, p.libelle, p.typezone,  -- sauvegarde des colonnes utiles
+    (ST_Dump(ST_Difference(p.geom, m.geom))).geom::geometry(Polygon, 2154) AS geom,
+    -- extraction  des géométries dans la surface bati non concernées par un masque. On convertit les polygones multi-parties en plusieurs polygones
+    ST_Area((ST_Dump(ST_Difference(p.geom, m.geom))).geom) AS area_m2 -- calcul de l'area sur ce qui est explicité ci dessus
+FROM gst_arthur.parcelles_candidates AS p
+CROSS JOIN gst_arthur.masque_total AS m
+WHERE ST_Intersects(p.geom, m.geom)
+  AND NOT ST_IsEmpty(ST_Difference(p.geom, m.geom));
+
+
+--------------------------------------------------------------------------------
+-- ETAPE 6 (optionnelle) : IDENTIFICATION DU GISEMENT BATI (bati pouvant être densifié)
+---------------------------------------------------------------------------------
+
+
+----------------------------------------------------------------------------------
+-- ETAPE 7 : MISE EN FORME DE LA COUCHE FINALE
+----------------------------------------------------------------------------------
+-- On ne fait apparaître que les éléments ayant plus de 2000m² de terrain potentiellement constructibles
+
+DROP TABLE IF EXISTS gst_arthur.gnb_final;
+CREATE TABLE gst_arthur.gnb_final AS
+
+SELECT *
+FROM gst_arthur.gnb_brut
+WHERE area_m2 >= 2000 -- Filtre du gisement bati en ne récupérant que les surfaces supérieures à 2000 m²
+ORDER BY area_m2 DESC
