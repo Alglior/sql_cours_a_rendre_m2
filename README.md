@@ -28,3 +28,7 @@ J’avais donné ces détails oralement.
 Il n’est pas demandé de faire apparaitre les parcelles dans la tache urbaine. Aucun intérêt vous allez ralentir vos traitements. Il vous faut une enveloppe de polygones au sein de laquelle rechercher les gisements. Votre tâche urbaine doit être calculée et intégrée dans le script afin que vous puissiez identifier les gisements.  La manière dont vous allez insérer cette « brique » de calcul sera regardée.
 
 Je ne dis pas comment intégrer la tache urbaine, ça fait partie de l’exercice. C’est de la logique.
+
+Solution 1 : 
+Topo urbain = 50m premier buffer puis -30m 
+méthode du SCOT
