@@ -254,13 +254,11 @@ CREATE TABLE gst_arthur.tache_urbaine AS
 SELECT 
     c.codgeo,
     c.libgeo,
-    (ST_Dump(ST_Intersection(b.geom, c.geom))).geom::geometry(Polygon, 2154) AS geom
+    -- On utilise ST_Union pour fusionner tous les morceaux d'une même commune
+    ST_Union(ST_Intersection(b.geom, c.geom))::geometry(MultiPolygon, 2154) AS geom
 FROM gst_arthur.temp_buffer_global b
-JOIN gst_arthur.communes_epci_capi AS c ON ST_Intersects(b.geom, c.geom);
-
--- 4. On ajoute les surfaces à la fin (mieux vaut le faire sur les polygones déjà découpés)
-ALTER TABLE gst_arthur.tache_urbaine ADD COLUMN area_m2 float;
-UPDATE gst_arthur.tache_urbaine SET area_m2 = ST_Area(geom);
+JOIN gst_arthur.communes_epci_capi AS c ON ST_Intersects(b.geom, c.geom)
+GROUP BY c.codgeo, c.libgeo; -- Crucial pour n'avoir qu'une ligne par code commune
 
 --------------------------------------------------------------------------------
 -- ETAPE 7 : MISE EN FORME DE LA COUCHE FINALE
