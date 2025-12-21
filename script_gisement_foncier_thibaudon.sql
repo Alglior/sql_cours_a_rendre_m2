@@ -231,11 +231,38 @@ WHERE ST_Intersects(p.geom, m.geom)
 
 
 --------------------------------------------------------------------------------
--- ETAPE 6 (optionnelle) : IDENTIFICATION DU GISEMENT BATI (bati pouvant être densifié)
----------------------------------------------------------------------------------
+-- ETAPE 6 : CRÉATION DE LA TACHE URBAINE (Méthode du SCOT)
+--------------------------------------------------------------------------------
+-- Identification de l'enveloppe urbaine selon la méthode du SCOT :
+-- 1. Premier buffer de +50m autour des masques combinés (bâti + infra + équipements)
+-- 2. Deuxième buffer de -30m pour créer une zone de transition urbaine
+-- La tache urbaine représente l'espace de consommation foncière existante et sa continuité
+-- Découpage par commune pour une analyse territorialisée
 
+-- 1. On crée d'abord le buffer sur le masque global (une seule fois)
+DROP TABLE IF EXISTS gst_arthur.temp_buffer_global;
+CREATE TABLE gst_arthur.temp_buffer_global AS 
+SELECT ST_Buffer(ST_Buffer(geom, 50), -30) as geom
+FROM gst_arthur.masque_total;
 
-----------------------------------------------------------------------------------
+-- 2. On indexe cette géométrie temporaire
+CREATE INDEX idx_temp_buffer_geom ON gst_arthur.temp_buffer_global USING GIST(geom);
+
+-- 3. On fait l'intersection par commune (beaucoup plus rapide)
+DROP TABLE IF EXISTS gst_arthur.tache_urbaine;
+CREATE TABLE gst_arthur.tache_urbaine AS
+SELECT 
+    c.codgeo,
+    c.libgeo,
+    (ST_Dump(ST_Intersection(b.geom, c.geom))).geom::geometry(Polygon, 2154) AS geom
+FROM gst_arthur.temp_buffer_global b
+JOIN gst_arthur.communes_epci_capi AS c ON ST_Intersects(b.geom, c.geom);
+
+-- 4. On ajoute les surfaces à la fin (mieux vaut le faire sur les polygones déjà découpés)
+ALTER TABLE gst_arthur.tache_urbaine ADD COLUMN area_m2 float;
+UPDATE gst_arthur.tache_urbaine SET area_m2 = ST_Area(geom);
+
+--------------------------------------------------------------------------------
 -- ETAPE 7 : MISE EN FORME DE LA COUCHE FINALE
 ----------------------------------------------------------------------------------
 -- On ne fait apparaître que les éléments ayant plus de 2000m² de terrain potentiellement constructibles
