@@ -261,14 +261,67 @@ JOIN gst_arthur.communes_epci_capi AS c ON ST_Intersects(b.geom, c.geom)
 GROUP BY c.codgeo, c.libgeo; -- Crucial pour n'avoir qu'une ligne par code commune
 
 --------------------------------------------------------------------------------
--- ETAPE 7 : MISE EN FORME DE LA COUCHE FINALE
+-- ETAPE 7 : couche des gisements
 ----------------------------------------------------------------------------------
--- On ne fait apparaître que les éléments ayant plus de 2000m² de terrain potentiellement constructibles
+-- OBJECTIF : Produire la couche finale `gst_bati_nonbati` avec les 4 champs attendus :
+--            idgst (identifiant), nature ('bati' | 'non bati'), surface (m²), geom (Polygon,2154)
+-- LOGIQUE MÉTIER :
+--  1) NON BÂTI : reprend directement les morceaux de parcelles hors masques
+--     calculés en ETAPE 5 (table `gnb_brut`).
+--  2) BÂTI : correspond au reste des parcelles candidates une fois retranché le non bâti.
+-- CHOIX TECHNIQUES :
+--  - On utilise ST_Dump pour éclater les multipolygones en polygones simples.
+--  - On force le SRID 2154 sur les géométries et sur le POLYGON EMPTY via
+--    ST_GeomFromText('POLYGON EMPTY', 2154) afin d'éviter les erreurs de SRID mixtes.
+--  - L'identifiant `idgst` est généré par ROW_NUMBER() et reste unique via un décalage
+--    entre les blocs NON BÂTI et BÂTI.
+DROP TABLE IF EXISTS gst_arthur.gst_bati_nonbati;
+CREATE TABLE gst_arthur.gst_bati_nonbati AS
 
-DROP TABLE IF EXISTS gst_arthur.gnb_final;
-CREATE TABLE gst_arthur.gnb_final AS
+-- Zones NON BÂTIES (du gisement brut)
+SELECT 
+    ROW_NUMBER() OVER (ORDER BY p.gid) AS idgst, -- Identifiant séquentiel pour le non bâti
+    'non bati' AS nature,                        -- Libellé conforme au cahier des charges
+    p.area_m2 AS surface,                        -- Surface en m² calculée en ETAPE 5
+    p.geom                                       -- Géométrie (Polygon, 2154)
+FROM gst_arthur.gnb_brut p
 
-SELECT *
-FROM gst_arthur.gnb_brut
-WHERE area_m2 >= 2000 -- Filtre du gisement bati en ne récupérant que les surfaces supérieures à 2000 m²
-ORDER BY area_m2 DESC
+UNION ALL
+
+-- Zones BÂTIES (parcelles MOINS le non-bâti)
+SELECT 
+    ROW_NUMBER() OVER (ORDER BY p.gid) + (SELECT COUNT(*) FROM gst_arthur.gnb_brut) AS idgst, -- Décalage pour garantir l'unicité
+    'bati' AS nature,                                                                        -- Partie construite de la parcelle
+    ST_Area(
+        (ST_Dump(
+            ST_Difference(
+                p.geom, 
+                COALESCE(g.geom_union, ST_GeomFromText('POLYGON EMPTY', 2154)) -- SRID explicite
+            )
+        )).geom
+    ) AS surface,                                                                            -- Surface en m² de la partie bâtie
+    (
+        ST_Dump(
+            ST_Difference(
+                p.geom, 
+                COALESCE(g.geom_union, ST_GeomFromText('POLYGON EMPTY', 2154)) -- SRID explicite
+            )
+        )
+    ).geom::geometry(Polygon, 2154) AS geom                                                  -- Géométrie (Polygon, 2154)
+FROM gst_arthur.parcelles_candidates p
+LEFT JOIN (
+    -- Union des morceaux non bâtis par parcelle (clé `gid`)
+    SELECT gid, ST_Union(geom) AS geom_union
+    FROM gst_arthur.gnb_brut
+    GROUP BY gid
+) g ON p.gid = g.gid
+-- On conserve uniquement les différences non vides (surface > 0)
+WHERE ST_Area(
+    ST_Difference(
+        p.geom, 
+        COALESCE(g.geom_union, ST_GeomFromText('POLYGON EMPTY', 2154)) -- SRID explicite
+    )
+) > 0;
+
+DROP TABLE IF EXISTS gst_arthur.temp_buffer_global; -- Nettoyage de la table temporaire
+
