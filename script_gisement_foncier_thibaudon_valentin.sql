@@ -235,7 +235,7 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
 --------------------------------------------------------------------------------
 -- ETAPE 4 : SÉLECTION DU FONCIER BRUT (PARCELLES)
 --------------------------------------------------------------------------------
--- Identification des parcelles candidates en combinant PLU et tache urbaine pour les communes au RNU.
+-- Identification des parcelles candidates en combinant PLU et tache urbaine pour les communes au RNU(Règlement National d'Urbanisme).
 -- CONTEXTE : Le Plan Local d'Urbanisme (PLU) classe le territoire en zones ayant des vocations différentes.
 -- Certaines communes (Éclose-Badinières, Vaulx-Milieu) n'ont pas de PLU et sont soumises au RNU
 -- (Règlement National d'Urbanisme). Pour ces communes, on crée une tache urbaine.
@@ -494,28 +494,18 @@ SELECT ST_Union(geom) AS geom
 FROM gst_thibaudon_valentin.parcelles_ces_faible;
 
 -- 7.5 Retrait des infrastructures linéaires
---  Approche simple et rapide : on tente la soustraction, sinon on garde l'original
+--  ST_Difference retourne la géométrie originale si pas d'intersection
 DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_sans_lin;
 CREATE TABLE gst_thibaudon_valentin.parcelles_ces_sans_lin AS
 SELECT 
-    COALESCE(
-        (SELECT ST_Difference(p.geom, ST_Union(l.geom)) 
-         FROM gst_thibaudon_valentin.masque_infra AS l 
-         WHERE ST_Intersects(p.geom, l.geom)),
-        p.geom
-    ) AS geom
+    ST_Difference(p.geom, COALESCE((SELECT ST_Union(l.geom) FROM gst_thibaudon_valentin.masque_infra AS l), ST_GeomFromText('POLYGON EMPTY', 2154))) AS geom
 FROM gst_thibaudon_valentin.parcelles_ces_union AS p;
 
 -- 7.6 Retrait des équipements
 DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_sans_lin_equip;
 CREATE TABLE gst_thibaudon_valentin.parcelles_ces_sans_lin_equip AS
 SELECT 
-    COALESCE(
-        (SELECT ST_Difference(p.geom, ST_Union(e.geom)) 
-         FROM gst_thibaudon_valentin.masque_equipement AS e 
-         WHERE ST_Intersects(p.geom, e.geom)),
-        p.geom
-    ) AS geom
+    ST_Difference(p.geom, COALESCE((SELECT ST_Union(e.geom) FROM gst_thibaudon_valentin.masque_equipement AS e), ST_GeomFromText('POLYGON EMPTY', 2154))) AS geom
 FROM gst_thibaudon_valentin.parcelles_ces_sans_lin AS p;
 
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_brut;
