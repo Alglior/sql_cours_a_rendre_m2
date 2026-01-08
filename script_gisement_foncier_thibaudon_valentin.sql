@@ -215,22 +215,17 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
                                    --  Les points pourraient être des sources, fontaines, sans emprise surfacique significative
 
     UNION ALL
-    -- 7. Écoles (OSM) avec buffer 50m
-    --  Équipements publics d'enseignement (maternelles, primaires, collèges, lycées)
-    --  Buffer de 50m pour préserver un environnement calme et sécurisé autour des établissements
-    --  Zone tampon contre les nuisances et pour la sécurité des enfants (circulation, bruit)
-    SELECT ST_Buffer(ST_Force2D(geom), 50)::geometry(Geometry, 2154) AS geom
+    -- 7. Écoles (OSM) avec buffer 1m (alignement petit tampon)
+    --  Tampon minimal pour rester proche de l'emprise réelle
+    SELECT ST_Buffer(ST_Force2D(geom), 1)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.osm_school
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Ne prend que les emprises des établissements scolaires (surfaces)
                                    --  Les points seraient des localisations approximatives sans emprise définie
 
     UNION ALL
-    -- 8. Postes de transformation électrique (OSM) avec buffer 50m
-    --  Infrastructures du réseau électrique haute et moyenne tension
-    --  Buffer de 50m pour les servitudes liées aux champs électromagnétiques
-    --  Distance de sécurité réglementaire par rapport aux installations électriques
-    SELECT ST_Buffer(ST_Force2D(geom), 50)::geometry(Geometry, 2154) AS geom
+    -- 8. Postes de transformation électrique (OSM) avec buffer 1m (tampon minimal)
+    SELECT ST_Buffer(ST_Force2D(geom), 1)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.bdtopo_poste_de_transformation
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Filtre pour ne traiter que les emprises surfaciques
@@ -240,29 +235,89 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
 --------------------------------------------------------------------------------
 -- ETAPE 4 : SÉLECTION DU FONCIER BRUT (PARCELLES)
 --------------------------------------------------------------------------------
--- Identification des parcelles candidates grâce au zonage d'urbanisme en vigueur.
+-- Identification des parcelles candidates en combinant PLU et tache urbaine pour les communes au RNU.
 -- CONTEXTE : Le Plan Local d'Urbanisme (PLU) classe le territoire en zones ayant des vocations différentes.
--- On ne garde que les parcelles cadastrales qui sont dans notre territoire.
+-- Certaines communes (Éclose-Badinières, Vaulx-Milieu) n'ont pas de PLU et sont soumises au RNU
+-- (Règlement National d'Urbanisme). Pour ces communes, on crée une tache urbaine.
 -- LOGIQUE DE SÉLECTION :
 --  Zone U (Urbaine) : zone déjà urbanisée où les constructions sont autorisées
 --  Zone AUc (À Urbaniser constructible) : zone d'extension urbaine programmée à court terme
 --  Zone AUs (À Urbaniser stricte) : zone d'urbanisation future conditionnée à une évolution du PLU
 -- Les zones A (Agricole) et N (Naturelle) sont exclues car protégées de l'urbanisation.
--- NOTE : On utilise le zonage d'urbanisme plutôt que le parcellaire cadastral car certaines communes
--- (Éclose-Badinières et Vaulx-Milieu) présentent des lacunes dans les données cadastrales.
+-- NOUVEAUTÉ : On utilise ensuite les parcelles cadastrales qui intersectent ces zones constructibles,
+-- car cela permet une analyse plus fine du gisement parcelle par parcelle.
 
-DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_candidates;
-
-CREATE TABLE gst_thibaudon_valentin.parcelles_candidates AS
-
-SELECT zu.*
+DROP TABLE IF EXISTS gst_thibaudon_valentin.zones_plu;
+CREATE TABLE gst_thibaudon_valentin.zones_plu AS
+SELECT 
+    zu.gid,
+    zu.libelle,
+    zu.typezone,
+    zu.geom
 FROM geonum_reference.zonage_urbanisme AS zu
 JOIN gst_thibaudon_valentin.communes_epci_capi AS c
-ON ST_Intersects(zu.geom, c.geom)
-WHERE typezone IN('U', 'AUc', 'AUs'); -- Sélection des zones constructibles selon le PLU
-                                      --  U : zone urbaine dense, équipements existants
-                                      --  AUc : ouverture à l'urbanisation immédiate possible
-                                      --  AUs : urbanisation future, nécessite modification du PLU
+    ON ST_Intersects(zu.geom, c.geom)
+WHERE (zu.typezone LIKE 'U%' OR zu.typezone LIKE 'AU%')
+    AND zu.libelle NOT LIKE 'UP'; -- Exclusion des zones publiques
+
+CREATE INDEX idx_zones_plu_geom ON gst_thibaudon_valentin.zones_plu USING GIST(geom);
+
+-- 4.2 Communes RNU (sans PLU)
+DROP TABLE IF EXISTS gst_thibaudon_valentin.communes_rnu;
+CREATE TABLE gst_thibaudon_valentin.communes_rnu AS
+SELECT 
+    codgeo,
+    libgeo,
+    geom
+FROM gst_thibaudon_valentin.communes_epci_capi
+WHERE codgeo IN ('38152','38530');
+
+CREATE INDEX idx_communes_rnu_geom ON gst_thibaudon_valentin.communes_rnu USING GIST(geom);
+
+-- RNU (Règlement National d'Urbanisme) : pour les communes sans PLU, on remplace le zonage par une tâche urbaine
+-- construite via un double buffer (50 m puis -30 m) autour des bâtiments. Cette tâche est ensuite unionnée aux zones PLU
+-- pour définir le socle constructible commun (PLU + RNU) utilisé dans toutes les étapes suivantes.
+CREATE TABLE gst_thibaudon_valentin.tache_urbaine_rnu AS
+SELECT 
+    (ST_Dump(ST_Buffer(ST_Union(ST_Buffer(bat.geom,50)),-30))).geom::geometry(Polygon,2154) AS geom
+FROM gst_thibaudon_valentin.communes_rnu AS rnu
+JOIN geonum_reference.bdtopo_batiment AS bat ON ST_Intersects(rnu.geom, bat.geom);
+
+CREATE INDEX idx_tache_urbaine_rnu_geom ON gst_thibaudon_valentin.tache_urbaine_rnu USING GIST(geom);
+
+-- 4.4 Union des zones PLU (dissolues) et tache urbaine RNU
+DROP TABLE IF EXISTS gst_thibaudon_valentin.plu_u;
+CREATE TABLE gst_thibaudon_valentin.plu_u AS
+SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon,2154) AS geom
+FROM gst_thibaudon_valentin.zones_plu;
+
+DROP TABLE IF EXISTS gst_thibaudon_valentin.zones_constructibles;
+CREATE TABLE gst_thibaudon_valentin.zones_constructibles AS
+SELECT geom FROM gst_thibaudon_valentin.plu_u
+UNION ALL
+SELECT geom FROM gst_thibaudon_valentin.tache_urbaine_rnu;
+
+CREATE INDEX idx_zones_constructibles_geom ON gst_thibaudon_valentin.zones_constructibles USING GIST(geom);
+
+-- 4.5 Extraction des parcelles cadastrales qui intersectent les zones constructibles
+--  CHANGEMENT MAJEUR : On passe du zonage d'urbanisme aux parcelles cadastrales
+--  Avantages : 
+--    - Analyse parcelle par parcelle (calcul du CES possible)
+--    - Correspondance avec les unités foncières réelles
+--    - Meilleure précision pour les tènements bâtis
+--  On utilise ST_Intersection pour découper les parcelles aux limites des zones constructibles
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_candidates;
+CREATE TABLE gst_thibaudon_valentin.parcelles_candidates AS
+SELECT 
+    ROW_NUMBER() OVER () AS gid, -- Nouvel identifiant unique pour chaque fragment de parcelle
+    (ST_Dump(ST_Intersection(ST_MakeValid(par.geom), zc.geom))).geom::geometry(Polygon, 2154) AS geom
+FROM geonum_reference.parcelles AS par
+INNER JOIN gst_thibaudon_valentin.zones_constructibles AS zc 
+    ON ST_Intersects(par.geom, zc.geom);
+-- Suppression du GROUP BY coûteux : on travaille directement avec les fragments
+
+CREATE INDEX idx_parcelles_candidates_geom ON gst_thibaudon_valentin.parcelles_candidates USING GIST(geom);
+ANALYZE gst_thibaudon_valentin.parcelles_candidates; -- Mise à jour des statistiques pour l'optimiseur
 
 --------------------------------------------------------------------------------
 -- ETAPE 5 : IDENTIFICATION DU GISEMENT NON BATI
@@ -300,21 +355,24 @@ FROM (
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gnb_brut;
 CREATE TABLE gst_thibaudon_valentin.gnb_brut AS
 
+-- OPTIMISATION 
+--  Fusionner TOUTES les parcelles candidates en une seule géométrie AVANT la soustraction
+--  Au lieu de 1000+ ST_Difference (une par parcelle), on en fait UNE SEULE
+--  Puis on éclate le résultat en fragments => GAIN ÉNORME de performance
 SELECT 
-    p.gid, p.libelle, p.typezone,  -- Sauvegarde des attributs descriptifs des zones d'urbanisme
-    (ST_Dump(ST_Difference(p.geom, m.geom))).geom::geometry(Polygon, 2154) AS geom,
-    -- ST_Difference : soustraction spatiale (parcelle MOINS masque)
-    -- ST_Dump : éclate les MultiPolygon en Polygon simples pour faciliter les analyses ultérieures
-    --  Chaque fragment de gisement devient une entité géographique indépendante
-    ST_Area((ST_Dump(ST_Difference(p.geom, m.geom))).geom) AS area_m2 -- Calcul immédiat de la surface en m²
-                                                                       --  Permet le tri et le filtrage par taille de gisement
-FROM gst_thibaudon_valentin.parcelles_candidates AS p
-CROSS JOIN gst_thibaudon_valentin.masque_total AS m  -- CROSS JOIN car le masque est une géométrie unique
-                                                      --  Pas besoin de condition de jointure attributaire
-WHERE ST_Intersects(p.geom, m.geom)                   -- Filtre spatial : seules les parcelles concernées par un masque
-                                                      --  Optimisation : évite de calculer des différences nulles
-  AND NOT ST_IsEmpty(ST_Difference(p.geom, m.geom)); -- Exclut les parcelles entièrement recouvertes par les masques
-                                                      --  Pas de gisement si la parcelle est totalement contrainte
+    ROW_NUMBER() OVER () AS gid,  -- Nouvel identifiant pour chaque fragment
+    geom,
+    ST_Area(geom) AS area_m2
+FROM (
+    SELECT 
+        (ST_Dump(
+            ST_Difference(
+                (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.parcelles_candidates),  -- Fusion de TOUTES les parcelles
+                (SELECT geom FROM gst_thibaudon_valentin.masque_total)  -- Masque unique
+            )
+        )).geom::geometry(Polygon, 2154) AS geom
+) AS fragments
+WHERE ST_Area(geom) > 0;  -- Filtrage des fragments vides
 
 
 --------------------------------------------------------------------------------
@@ -364,76 +422,244 @@ JOIN gst_thibaudon_valentin.communes_epci_capi AS c ON ST_Intersects(b.geom, c.g
 -- NOTE : Pas de GROUP BY car ST_Dump produit déjà plusieurs lignes par commune si fragmentation
 
 --------------------------------------------------------------------------------
--- ETAPE 7 : couche des gisements
+-- ETAPE 7 : COUCHE DES GISEMENTS AVEC CALCUL DU CES
 ----------------------------------------------------------------------------------
 -- OBJECTIF : Produire la couche finale `gst_bati_nonbati` avec les 4 champs attendus :
 --            idgst (identifiant), nature ('bati' | 'non bati'), surface (m²), geom (Polygon,2154)
--- LOGIQUE MÉTIER :
---  1) NON BÂTI : reprend directement les morceaux de parcelles hors masques
---     calculés en ETAPE 5 (table `gnb_brut`).
---  2) BÂTI : correspond au reste des parcelles candidates une fois retranché le non bâti.
--- CHOIX TECHNIQUES :
---  - On utilise ST_Dump pour éclater les multipolygones en polygones simples.
---  - On force le SRID 2154 sur les géométries et sur le POLYGON EMPTY via
---    ST_GeomFromText('POLYGON EMPTY', 2154) afin d'éviter les erreurs de SRID mixtes.
---  - L'identifiant `idgst` est généré par ROW_NUMBER() et reste unique via un décalage
---    entre les blocs NON BÂTI et BÂTI.
+-- LOGIQUE MÉTIER ENRICHIE :
+--  1) NON BÂTI : reprend directement les morceaux de parcelles hors masques (ETAPE 5)
+--  2) BÂTI : parcelles avec bâtiments ET CES ≤ 0,2 (20% d'emprise au sol maximum)
+--     NOUVEAUTÉ : Le gisement bâti ne concerne QUE les parcelles peu densifiées (potentiel de densification)
+--     Logique : Si une parcelle a un CES ≤ 20%, elle est sous-exploitée et constitue un gisement
+--     pour densification ou division parcellaire.
+
+-- 7.1 Identification des parcelles avec bâtiments
+--  On sélectionne les parcelles candidates qui contiennent au moins un bâtiment
+--  Ces parcelles sont potentiellement densifiables si leur CES est faible
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_avec_bati;
+CREATE TABLE gst_thibaudon_valentin.parcelles_avec_bati AS
+SELECT 
+    p.gid,
+    p.geom,
+    ST_Area(p.geom) AS surface_parcelle_m2
+FROM gst_thibaudon_valentin.parcelles_candidates AS p
+INNER JOIN geonum_reference.bdtopo_batiment AS bat 
+    ON ST_Intersects(p.geom, bat.geom);
+
+CREATE INDEX idx_parcelles_avec_bati_geom ON gst_thibaudon_valentin.parcelles_avec_bati USING GIST(geom);
+CREATE INDEX idx_parcelles_avec_bati_gid ON gst_thibaudon_valentin.parcelles_avec_bati(gid);
+
+-- 7.2 Calcul de la surface bâtie par parcelle
+--  On agrège tous les bâtiments présents sur chaque parcelle
+--  ST_Union fusionne les bâtiments multiples en une seule géométrie
+--  ST_Intersection découpe les bâtiments aux limites de la parcelle (cas des bâtiments à cheval)
+DROP TABLE IF EXISTS gst_thibaudon_valentin.bati_par_parcelle;
+CREATE TABLE gst_thibaudon_valentin.bati_par_parcelle AS
+SELECT 
+    p.gid,
+    ST_Intersection(ST_Union(bat.geom), p.geom) AS geom_bati,
+    ST_Area(ST_Intersection(ST_Union(bat.geom), p.geom)) AS surface_bati_m2
+FROM gst_thibaudon_valentin.parcelles_avec_bati AS p
+INNER JOIN geonum_reference.bdtopo_batiment AS bat 
+    ON ST_Intersects(p.geom, bat.geom)
+GROUP BY p.gid, p.geom;
+
+CREATE INDEX idx_bati_par_parcelle_gid ON gst_thibaudon_valentin.bati_par_parcelle(gid);
+
+-- 7.3 Calcul du CES (Coefficient d'Emprise au Sol) et filtrage
+--  CES = Surface bâtie / Surface de la parcelle
+--  On ne garde que les parcelles avec CES ≤ 0,2 (20%)
+--  Ces parcelles constituent le gisement bâti : elles sont sous-densifiées
+--  et offrent un potentiel de construction complémentaire
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_faible;
+CREATE TABLE gst_thibaudon_valentin.parcelles_ces_faible AS
+SELECT 
+    p.gid,
+    p.geom,
+    bp.surface_bati_m2,
+    p.surface_parcelle_m2,
+    bp.surface_bati_m2 / p.surface_parcelle_m2 AS ces
+FROM gst_thibaudon_valentin.parcelles_avec_bati AS p
+INNER JOIN gst_thibaudon_valentin.bati_par_parcelle AS bp 
+    ON p.gid = bp.gid
+WHERE bp.surface_bati_m2 / p.surface_parcelle_m2 <= 0.2; -- Seuil de densification : 20%
+
+CREATE INDEX idx_parcelles_ces_faible_geom ON gst_thibaudon_valentin.parcelles_ces_faible USING GIST(geom);
+
+-- 7.4 Fusion des parcelles à faible CES
+--  On regroupe toutes les parcelles CES ≤ 0.2 en une seule géométrie
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_union;
+CREATE TABLE gst_thibaudon_valentin.parcelles_ces_union AS
+SELECT ST_Union(geom) AS geom
+FROM gst_thibaudon_valentin.parcelles_ces_faible;
+
+-- 7.5 Retrait des infrastructures linéaires
+--  Approche simple et rapide : on tente la soustraction, sinon on garde l'original
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_sans_lin;
+CREATE TABLE gst_thibaudon_valentin.parcelles_ces_sans_lin AS
+SELECT 
+    COALESCE(
+        (SELECT ST_Difference(p.geom, ST_Union(l.geom)) 
+         FROM gst_thibaudon_valentin.masque_infra AS l 
+         WHERE ST_Intersects(p.geom, l.geom)),
+        p.geom
+    ) AS geom
+FROM gst_thibaudon_valentin.parcelles_ces_union AS p;
+
+-- 7.6 Retrait des équipements
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_sans_lin_equip;
+CREATE TABLE gst_thibaudon_valentin.parcelles_ces_sans_lin_equip AS
+SELECT 
+    COALESCE(
+        (SELECT ST_Difference(p.geom, ST_Union(e.geom)) 
+         FROM gst_thibaudon_valentin.masque_equipement AS e 
+         WHERE ST_Intersects(p.geom, e.geom)),
+        p.geom
+    ) AS geom
+FROM gst_thibaudon_valentin.parcelles_ces_sans_lin AS p;
+
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_brut;
+CREATE TABLE gst_thibaudon_valentin.gisement_bati_brut AS
+SELECT 
+    (ST_Dump(ST_CollectionExtract(ST_Intersection(p.geom, zc.geom), 3))).geom::geometry(Polygon, 2154) AS geom
+FROM gst_thibaudon_valentin.parcelles_ces_sans_lin_equip AS p
+CROSS JOIN (
+    SELECT ST_Union(geom) AS geom 
+    FROM gst_thibaudon_valentin.zones_constructibles
+) AS zc
+WHERE ST_Intersects(p.geom, zc.geom);
+
+-- 7.8 Filtrage par surface ≥ 2000 m² avec nettoyage géométrique
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_filtre_temp;
+CREATE TABLE gst_thibaudon_valentin.gisement_bati_filtre_temp AS
+SELECT 
+    geom,
+    ST_Area(geom) AS surface_m2
+FROM gst_thibaudon_valentin.gisement_bati_brut
+WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -1), 1)) >= 2000;
+
+-- 7.9 RECALCUL DU CES sur les tènements finaux (pas les parcelles d'origine)
+--  C'est le 2ème filtrage CES : on vérifie que le tènement final a bien CES ≤ 0.2
+DROP TABLE IF EXISTS gst_thibaudon_valentin.bati_par_tenement;
+CREATE TABLE gst_thibaudon_valentin.bati_par_tenement AS
+SELECT 
+    t.geom AS geom_tenement,
+    t.surface_m2,
+    ST_Intersection(ST_Union(bat.geom), t.geom) AS geom_bati,
+    ST_Area(ST_Intersection(ST_Union(bat.geom), t.geom)) AS surface_bati_m2
+FROM gst_thibaudon_valentin.gisement_bati_filtre_temp AS t
+INNER JOIN geonum_reference.bdtopo_batiment AS bat 
+    ON ST_Intersects(t.geom, bat.geom)
+GROUP BY t.geom, t.surface_m2;
+
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_filtre;
+CREATE TABLE gst_thibaudon_valentin.gisement_bati_filtre AS
+SELECT 
+    geom_tenement AS geom,
+    surface_m2,
+    surface_bati_m2 / surface_m2 AS ces
+FROM gst_thibaudon_valentin.bati_par_tenement
+WHERE surface_bati_m2 / surface_m2 <= 0.2;  -- Seuil CES à 20% sur le tènement final
+
+CREATE INDEX idx_gisement_bati_filtre_geom ON gst_thibaudon_valentin.gisement_bati_filtre USING GIST(geom);
+
+-- 7.10 Filtrage du gisement non bâti par taille (≥ 2000 m²)
+--  Application de la même méthode de nettoyage et du même seuil
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_nonbati_filtre;
+CREATE TABLE gst_thibaudon_valentin.gisement_nonbati_filtre AS
+SELECT 
+    geom,
+    area_m2 AS surface_m2
+FROM gst_thibaudon_valentin.gnb_brut
+WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -1), 1)) >= 2000;
+
+CREATE INDEX idx_gisement_nonbati_filtre_geom ON gst_thibaudon_valentin.gisement_nonbati_filtre USING GIST(geom);
+
+-- 7.11 Éviter les chevauchements entre gisement non bâti et gisement bâti
+--  Le gisement non bâti a priorité (plus de potentiel)
+--  On soustrait les zones de gisement bâti qui chevaucheraient le non bâti
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_nonbati_final;
+CREATE TABLE gst_thibaudon_valentin.gisement_nonbati_final AS
+SELECT 
+    geom,
+    surface_m2
+FROM (
+    SELECT 
+        (ST_Dump(
+            CASE 
+                WHEN gb_union.geom IS NOT NULL THEN
+                    ST_Difference(gnb.geom, gb_union.geom)
+                ELSE
+                    gnb.geom
+            END
+        )).geom::geometry(Polygon, 2154) AS geom,
+        gnb.surface_m2
+    FROM gst_thibaudon_valentin.gisement_nonbati_filtre AS gnb
+    LEFT JOIN (
+        SELECT ST_Union(geom) AS geom
+        FROM gst_thibaudon_valentin.gisement_bati_filtre
+    ) gb_union ON ST_Intersects(gnb.geom, gb_union.geom)
+) AS sub
+WHERE ST_Area(geom) > 0;
+
+-- 7.12 Fusion finale des deux types de gisements
+--  Création de la couche finale avec les 4 champs attendus
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gst_bati_nonbati;
 CREATE TABLE gst_thibaudon_valentin.gst_bati_nonbati AS
 
--- Zones NON BÂTIES (du gisement brut)
---  Correspondent aux espaces libres identifiés après soustraction de tous les masques
---  Représentent le potentiel foncier mobilisable pour de nouvelles constructions
+-- Gisement NON BÂTI
 SELECT 
-    ROW_NUMBER() OVER (ORDER BY p.gid) AS idgst, -- Identifiant séquentiel unique pour chaque fragment
-    'non bati' AS nature,                        -- Qualification de la nature du gisement
-    p.area_m2 AS surface_m2,                        -- Surface en m² calculée en ETAPE 5
-                                                 --  Permet le tri par taille et le calcul de surfaces cumulées
-    p.geom                                       -- Géométrie (Polygon, 2154) du fragment de gisement
-FROM gst_thibaudon_valentin.gnb_brut p
+    geom,
+    'non-bâti' AS nature,
+    ST_Area(geom) AS surface
+FROM gst_thibaudon_valentin.gisement_nonbati_final
 
 UNION ALL
 
--- Zones BÂTIES (parcelles MOINS le non-bâti)
---  Correspondent aux espaces des parcelles candidats qui sont DÉJÀ occupés (bâti, infrastructures, équipements)
---  Représentent la consommation foncière existante, en complément du gisement disponible
---  Permettent de calculer le ratio gisement / surface déjà consommée par zone
+-- Gisement BÂTI (parcelles à faible CES)
 SELECT 
-    ROW_NUMBER() OVER (ORDER BY p.gid) + (SELECT COUNT(*) FROM gst_thibaudon_valentin.gnb_brut) AS idgst, 
-    -- Décalage pour garantir l'unicité des identifiants entre les deux blocs (non bâti + bâti)
-    --  Les ID du bâti commencent où s'arrêtent ceux du non bâti
-    'bati' AS nature,  -- Qualification de la nature : partie construite/occupée de la parcelle
-    ST_Area(
-        (ST_Dump(
-            ST_Difference(
-                p.geom, 
-                COALESCE(g.geom_union, ST_GeomFromText('POLYGON EMPTY', 2154)) -- SRID explicite
-            )
-        )).geom
-    ) AS surface_m2,                                                                            -- Surface en m² de la partie bâtie
-    (
-        ST_Dump(
-            ST_Difference(
-                p.geom, 
-                COALESCE(g.geom_union, ST_GeomFromText('POLYGON EMPTY', 2154)) -- SRID explicite
-            )
-        )
-    ).geom::geometry(Polygon, 2154) AS geom                                                  -- Géométrie (Polygon, 2154)
-FROM gst_thibaudon_valentin.parcelles_candidates p
-LEFT JOIN (
-    -- Union des morceaux non bâtis par parcelle (clé `gid`)
-    --  Une parcelle peut avoir plusieurs fragments de gisement non bâti
-    --  ST_Union les réassemble en une géométrie unique pour faciliter la soustraction
-    SELECT gid, ST_Union(geom) AS geom_union
-    FROM gst_thibaudon_valentin.gnb_brut
-    GROUP BY gid
-) g ON p.gid = g.gid
--- LEFT JOIN : conserve les parcelles sans gisement non bâti (totalement bâties)
--- On conserve uniquement les différences non vides (surface > 0)
---  Évite de créer des polygones vides ou de surface négligeable
-WHERE ST_Area(
-    ST_Difference(
-        p.geom, 
-        COALESCE(g.geom_union, ST_GeomFromText('POLYGON EMPTY', 2154)) -- SRID explicite
-    )
-) > 0;
+    geom,
+    'bâti' AS nature,
+    ST_Area(geom) AS surface
+FROM gst_thibaudon_valentin.gisement_bati_filtre;
+
+-- Créer un identifiant unique à chaque tènement
+ALTER TABLE gst_thibaudon_valentin.gst_bati_nonbati
+ADD COLUMN idgst SERIAL PRIMARY KEY;
+
+CREATE INDEX idx_gst_bati_nonbati_geom ON gst_thibaudon_valentin.gst_bati_nonbati USING GIST(geom);
+
+-- Nettoyage des tables intermédiaires
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_avec_bati;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.bati_par_parcelle;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_faible;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_union;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_sans_lin;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_sans_lin_equip;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_brut;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_filtre_temp;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.bati_par_tenement;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_filtre;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_nonbati_filtre;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_nonbati_final;
+
+DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_total;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_infra;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_batiment;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_equipement;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.gnb_brut;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.plu_u;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.temp_buffer_global;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.communes_rnu;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.tache_urbaine_rnu;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_candidates;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.zones_constructibles;
+
+
+
+
+
+
+
+
+
