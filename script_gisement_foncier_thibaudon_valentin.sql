@@ -429,7 +429,7 @@ JOIN gst_thibaudon_valentin.communes_epci_capi AS c ON ST_Intersects(b.geom, c.g
 -- LOGIQUE MÉTIER ENRICHIE :
 --  1) NON BÂTI : reprend directement les morceaux de parcelles hors masques (ETAPE 5)
 --  2) BÂTI : parcelles avec bâtiments ET CES ≤ 0,2 (20% d'emprise au sol maximum)
---     NOUVEAUTÉ : Le gisement bâti ne concerne QUE les parcelles peu densifiées (potentiel de densification)
+--     Le gisement bâti ne concerne QUE les parcelles peu densifiées (potentiel de densification)
 --     Logique : Si une parcelle a un CES ≤ 20%, elle est sous-exploitée et constitue un gisement
 --     pour densification ou division parcellaire.
 
