@@ -110,19 +110,38 @@ FROM (
         ST_Buffer(
             r.geom,                 -- La géométrie de la route en question
             CASE                    -- Largeur dynamique du tampon en fonction du type de route (colonne highway)
-                -- Pour les routes principales et autoroutes, le tampon est de 15 mètres
+                -- Routes principales et autoroutes : 15m de recul (servitudes légales)
                 --  Catégories OSM : motorway (autoroute), trunk (voie express), primary (route principale)
                 --  Les suffixes '_link' désignent les bretelles de raccordement à ces axes
                 WHEN highway IN ('motorway', 'motorway_link', 'primary', 'primary_link', 'trunk', 'trunk_link') THEN 15
-                -- Pour les routes secondaires, le tampon est plus étroit : 7 mètres
-                --  Toutes les autres catégories de voies (secondary, tertiary, residential, etc.)
-                --  Impact moindre sur la constructibilité car trafic et nuisances réduits
-                ELSE 7
+                
+                -- Routes secondaires et tertiaires : 7m de recul (circulation automobile significative)
+                --  Impact modéré sur la constructibilité (bruit, accès)
+                WHEN highway IN ('secondary', 'secondary_link', 'tertiary', 'tertiary_link') THEN 7
+                
+                -- Voies de desserte locale : 4m de recul (voies résidentielles et non classées)
+                --  Circulation locale limitée mais nécessitant un recul minimum
+                WHEN highway IN ('residential', 'unclassified', 'living_street') THEN 4
+                
+                -- Voies piétonnes/cyclables : AUCUN buffer (pas d'impact sur la constructibilité)
+                --  footway : trottoirs et chemins piétonniers
+                --  path : sentiers
+                --  steps : escaliers
+                --  cycleway : pistes cyclables
+                --  pedestrian : zones piétonnes
+                --  platform : quais de transport
+                --  bridleway : chemins équestres
+                WHEN highway IN ('footway', 'path', 'steps', 'cycleway', 'pedestrian', 'platform', 'bridleway', 'track', 'service') THEN 0
+                
+                -- Par défaut (construction, autres) : 1m de sécurité
+                ELSE 1
             END
         ) AS geom
     FROM geonum_reference.osm_road AS r
     -- Jointure spatiale pour ne garder que les routes intersectant la zone d'étude
     JOIN zone_etude z ON ST_Intersects(r.geom, z.geom)
+    -- Filtre pour exclure les voies avec buffer = 0 (optimisation)
+    WHERE highway NOT IN ('footway', 'path', 'steps', 'cycleway', 'pedestrian', 'platform', 'bridleway', 'track', 'service')
 
     --Jointure des deux blocs avec UNION ALL pour combiner les résultats
     UNION ALL
@@ -163,7 +182,7 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
                                    --  Évite de créer un buffer circulaire de 100m autour d'un simple point
 
     UNION ALL
-    --3. Cimetières
+    --2. Cimetières
     --  Domaine public communal affecté au service public funéraire
     --  Non aliénable et soumis à des réglementations sanitaires spécifiques
     SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
@@ -173,7 +192,7 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
                                    --  Les points de données seraient des localisations approximatives sans emprise réelle
 
     UNION ALL
-    --4. Centres sportifs (Surface seulement)
+    --3. Centres sportifs (Surface seulement)
     --  Équipements publics dédiés aux activités sportives et de loisirs
     --  Fonction sociale importante : maintien de la santé publique et du lien social
     SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
@@ -183,7 +202,7 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
                                    --  Exclut les points OSM qui pourraient représenter de petits équipements ponctuels
 
     UNION ALL
-    --5. Parcs
+    --4. Parcs
     --  Espaces verts urbains assurant des fonctions écologiques (îlots de fraîcheur, biodiversité)
     --  Rôle social (loisirs, détente) et contribution au cadre de vie
     --  Éléments de la trame verte urbaine à préserver dans les documents d'urbanisme
@@ -194,7 +213,7 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
                                    --  Évite de masquer une zone entière à partir d'un point d'entrée du parc
 
     UNION ALL
-    --6. Eau
+    --5. Eau
     --  Plans d'eau, lacs, étangs, zones humides : milieux naturels protégés (SDAGE, Loi sur l'eau)
     --  Risques d'inondation et servitudes d'écoulement des eaux
     --  Préservation de la ressource en eau et des écosystèmes aquatiques
@@ -205,7 +224,7 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
                                    --  Les points pourraient être des sources, fontaines, sans emprise surfacique significative
 
     UNION ALL
-    -- 7. Écoles (OSM) avec buffer 1m (alignement petit tampon)
+    -- 6. Écoles (OSM) avec buffer 1m (alignement petit tampon)
     --  Tampon minimal pour rester proche de l'emprise réelle
     SELECT ST_Buffer(ST_Force2D(geom), 1)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.osm_school
@@ -214,7 +233,7 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
                                    --  Les points seraient des localisations approximatives sans emprise définie
 
     UNION ALL
-    -- 8. Postes de transformation électrique (OSM) avec buffer 1m (tampon minimal)
+    -- 7. Postes de transformation électrique (OSM) avec buffer 1m (tampon minimal)
     SELECT ST_Buffer(ST_Force2D(geom), 1)::geometry(Geometry, 2154) AS geom
     FROM geonum_reference.bdtopo_poste_de_transformation
     WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
@@ -264,30 +283,22 @@ WHERE codgeo IN ('38152','38530');
 
 CREATE INDEX idx_communes_rnu_geom ON gst_thibaudon_valentin.communes_rnu USING GIST(geom);
 
--- RNU (Règlement National d'Urbanisme) : pour les communes sans PLU, on remplace le zonage par une tâche urbaine
--- construite via un double buffer (50 m puis -30 m) autour des bâtiments. Cette tâche est ensuite unionnée aux zones PLU
--- pour définir le socle constructible commun (PLU + RNU) utilisé dans toutes les étapes suivantes.
-CREATE TABLE gst_thibaudon_valentin.tache_urbaine_rnu AS
-SELECT 
-    (ST_Dump(ST_Buffer(ST_Union(ST_Buffer(bat.geom,50)),-30))).geom::geometry(Polygon,2154) AS geom
-FROM gst_thibaudon_valentin.communes_rnu AS rnu
-JOIN geonum_reference.bdtopo_batiment AS bat ON ST_Intersects(rnu.geom, bat.geom);
-
-CREATE INDEX idx_tache_urbaine_rnu_geom ON gst_thibaudon_valentin.tache_urbaine_rnu USING GIST(geom);
-
--- 4.4 Union des zones PLU (dissolues) et tache urbaine RNU
+-- 4.3 Union des zones PLU (dissolues)
+-- Note : La tache urbaine RNU sera créée après masque_total (ÉTAPE 5)
 DROP TABLE IF EXISTS gst_thibaudon_valentin.plu_u;
 CREATE TABLE gst_thibaudon_valentin.plu_u AS
 SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon,2154) AS geom
 FROM gst_thibaudon_valentin.zones_plu;
 
+-- 4.4 Zones constructibles provisoires (seules zones PLU pour l'instant)
+-- La tache urbaine RNU sera ajoutée après sa création à l'ÉTAPE 5.3
 DROP TABLE IF EXISTS gst_thibaudon_valentin.zones_constructibles;
-CREATE TABLE gst_thibaudon_valentin.zones_constructibles AS
-SELECT geom FROM gst_thibaudon_valentin.plu_u
-UNION ALL
-SELECT geom FROM gst_thibaudon_valentin.tache_urbaine_rnu;
+CREATE TABLE gst_thibaudon_valentin.zones_constructibles (
+    geom geometry(Polygon, 2154)
+);
 
-CREATE INDEX idx_zones_constructibles_geom ON gst_thibaudon_valentin.zones_constructibles USING GIST(geom);
+INSERT INTO gst_thibaudon_valentin.zones_constructibles 
+SELECT geom FROM gst_thibaudon_valentin.plu_u;
 
 -- 4.5 Extraction des parcelles cadastrales qui intersectent les zones constructibles
 --  CHANGEMENT MAJEUR : On passe du zonage d'urbanisme aux parcelles cadastrales
@@ -342,7 +353,51 @@ FROM (
 	FROM gst_thibaudon_valentin.masque_equipement
 ) AS s;
 
-DROP TABLE IF EXISTS gst_thibaudon_valentin.gnb_brut;
+-- 5.2 Création unique de la tache urbaine (Méthode SCOT unifiée)
+-- OPTIMISATION : On crée UNE SEULE tache urbaine via double buffer
+-- IMPORTANT : La tache urbaine doit représenter l'URBANISATION CONTINUE
+-- On la crée à partir du bâti + infrastructures UNIQUEMENT (pas les équipements publics comme l'eau)
+-- Méthodologie SCOT : +50m puis -30m
+DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_bati_infra;
+CREATE TABLE gst_thibaudon_valentin.masque_bati_infra AS
+SELECT ST_Union(geom) AS geom
+FROM (
+    SELECT geom FROM gst_thibaudon_valentin.masque_batiment
+    UNION ALL
+    SELECT geom FROM gst_thibaudon_valentin.masque_infra
+) AS s;
+
+DROP TABLE IF EXISTS gst_thibaudon_valentin.temp_buffer_global;
+CREATE TABLE gst_thibaudon_valentin.temp_buffer_global AS 
+SELECT 
+    ST_Difference(
+        ST_Buffer(ST_Buffer(mb.geom, 50), -30),  -- Tache urbaine brute (+50 puis -30m)
+        COALESCE(me.geom, ST_GeomFromText('POLYGON EMPTY', 2154))  -- Retrait des équipements (eau, parcs, etc.)
+    ) as geom
+FROM gst_thibaudon_valentin.masque_bati_infra mb
+LEFT JOIN (SELECT ST_Union(geom) AS geom FROM gst_thibaudon_valentin.masque_equipement) me ON true;
+
+CREATE INDEX idx_temp_buffer_geom ON gst_thibaudon_valentin.temp_buffer_global USING GIST(geom);
+
+-- 5.3 RNU (Règlement National d'Urbanisme) : pour les communes sans PLU, on utilise la tache urbaine unifiée
+-- découpée par commune RNU. Cette approche garantit une méthodologie cohérente (SCOT) partout.
+DROP TABLE IF EXISTS gst_thibaudon_valentin.tache_urbaine_rnu;
+CREATE TABLE gst_thibaudon_valentin.tache_urbaine_rnu AS
+SELECT 
+    (ST_Dump(ST_Intersection(tb.geom, rnu.geom))).geom::geometry(Polygon,2154) AS geom
+FROM gst_thibaudon_valentin.temp_buffer_global AS tb
+JOIN gst_thibaudon_valentin.communes_rnu AS rnu ON ST_Intersects(tb.geom, rnu.geom)
+WHERE ST_Area(ST_Intersection(tb.geom, rnu.geom)) > 0;
+
+CREATE INDEX idx_tache_urbaine_rnu_geom ON gst_thibaudon_valentin.tache_urbaine_rnu USING GIST(geom);
+
+-- 5.4 Mise à jour de zones_constructibles avec la tache urbaine RNU
+INSERT INTO gst_thibaudon_valentin.zones_constructibles 
+SELECT geom FROM gst_thibaudon_valentin.tache_urbaine_rnu;
+
+CREATE INDEX idx_zones_constructibles_geom ON gst_thibaudon_valentin.zones_constructibles USING GIST(geom);
+
+-- 5.5 Identification du gisement non bâti
 CREATE TABLE gst_thibaudon_valentin.gnb_brut AS
 
 -- OPTIMISATION 
@@ -366,35 +421,25 @@ WHERE ST_Area(geom) > 0;  -- Filtrage des fragments vides
 
 
 --------------------------------------------------------------------------------
--- ETAPE 6 : CRÉATION DE LA TACHE URBAINE (Méthode du SCOT)
+-- ETAPE 6 : DÉCOUPAGE DE LA TACHE URBAINE PAR COMMUNE (Méthode du SCOT)
 --------------------------------------------------------------------------------
 -- Identification de l'enveloppe urbaine selon la méthode du SCOT (Schéma de Cohérence Territoriale) :
 -- OBJECTIF : Délimiter l'enveloppe de l'urbanisation continue pour mesurer l'étalement urbain
--- MÉTHODE :
+
+-- MÉTHODOLOGIE UNIFIÉE (créée à l'ÉTAPE 4.3) :
 -- 1. Premier buffer de +50m autour des masques combinés (bâti + infra + équipements)
 --     Extension virtuelle pour combler les petits espaces interstitiels
 --     Permet de relier les îlots urbains séparés par de petites coupures (jardins, venelles)
 -- 2. Deuxième buffer de -30m pour créer une zone de transition urbaine
 --     Retrait pour revenir à une enveloppe plus proche de la réalité physique
 --     Buffer net de 20m (50m - 30m) pour lisser les contours tout en capturant la continuité
+
 -- RÉSULTAT : La tache urbaine représente l'espace de consommation foncière existante et sa continuité
 -- Elle permet de distinguer l'urbanisation dense des hameaux isolés et du mitage rural
 -- Découpage par commune pour une analyse territorialisée et des indicateurs locaux
-
--- 1. On crée d'abord le buffer sur le masque global (une seule fois)
--- OPTIMISATION : Calcul du double buffer en une seule passe sur la géométrie unifiée
---  Beaucoup plus performant que de le faire commune par commune
-DROP TABLE IF EXISTS gst_thibaudon_valentin.temp_buffer_global;
-CREATE TABLE gst_thibaudon_valentin.temp_buffer_global AS 
-SELECT ST_Buffer(ST_Buffer(geom, 50), -30) as geom  -- Double buffer : +50m puis -30m
-FROM gst_thibaudon_valentin.masque_total;
-
--- 2. On indexe cette géométrie temporaire
---  L'index spatial (GIST) accélère considérablement les opérations d'intersection qui suivent
-CREATE INDEX idx_temp_buffer_geom ON gst_thibaudon_valentin.temp_buffer_global USING GIST(geom);
-
--- 3. On fait l'intersection par commune avec éclatement en polygones simples
+-- ST_Dump produit des polygones simples pour chaque fragment urbain par commune
 -- DÉCOUPAGE COMMUNAL : Permet de produire des statistiques et cartographies par commune
+
 -- POLYGONES SIMPLES : Chaque fragment urbain (bourg, hameau, zone d'activité) devient une ligne distincte
 --  Avantages : facilite l'analyse fragment par fragment (calcul de surface, de compacité)
 --  Inconvénient : plusieurs lignes par commune si tache urbaine discontinue
@@ -416,7 +461,7 @@ JOIN gst_thibaudon_valentin.communes_epci_capi AS c ON ST_Intersects(b.geom, c.g
 ----------------------------------------------------------------------------------
 -- OBJECTIF : Produire la couche finale `gst_bati_nonbati` avec les 4 champs attendus :
 --            idgst (identifiant), nature ('bati' | 'non bati'), surface (m²), geom (Polygon,2154)
--- LOGIQUE MÉTIER ENRICHIE :
+-- LOGIQUE MÉTIER :
 --  1) NON BÂTI : reprend directement les morceaux de parcelles hors masques (ETAPE 5)
 --  2) BÂTI : parcelles avec bâtiments ET CES ≤ 0,2 (20% d'emprise au sol maximum)
 --     Le gisement bâti ne concerne QUE les parcelles peu densifiées (potentiel de densification)
@@ -509,14 +554,17 @@ CROSS JOIN (
 ) AS zc
 WHERE ST_Intersects(p.geom, zc.geom);
 
--- 7.8 Filtrage par surface ≥ 2000 m² avec nettoyage géométrique
+-- 7.8 Filtrage et NETTOYAGE du gisement bâti par surface ≥ 2000 m²
+--  Nettoyage géométrique RENFORCÉ pour éliminer les artefacts (lignes fines, polygones trop étroits)
+--  Double buffer (-5m puis +5m) : élimine les polygones < 10m de largeur
+--  Cela supprime les corridors étroits le long des routes et autres artefacts visuels
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_filtre_temp;
 CREATE TABLE gst_thibaudon_valentin.gisement_bati_filtre_temp AS
 SELECT 
-    geom,
-    ST_Area(geom) AS surface_m2
+    (ST_Dump(ST_Buffer(ST_Buffer(geom, -5), 5))).geom::geometry(Polygon, 2154) AS geom,
+    ST_Area((ST_Dump(ST_Buffer(ST_Buffer(geom, -5), 5))).geom) AS surface_m2
 FROM gst_thibaudon_valentin.gisement_bati_brut
-WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -1), 1)) >= 2000;
+WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -5), 5)) >= 2000;
 
 -- 7.9 RECALCUL DU CES sur les tènements(une unité foncière continue) finaux (pas les parcelles d'origine)
 --  C'est le 2ème filtrage CES : on vérifie que le tènement final a bien CES ≤ 0.2
@@ -543,15 +591,17 @@ WHERE surface_bati_m2 / surface_m2 <= 0.2;  -- Seuil CES à 20% sur le tènement
 
 CREATE INDEX idx_gisement_bati_filtre_geom ON gst_thibaudon_valentin.gisement_bati_filtre USING GIST(geom);
 
--- 7.10 Filtrage du gisement non bâti par taille (≥ 2000 m²)
---  Application de la même méthode de nettoyage et du même seuil
+-- 7.10 Filtrage et NETTOYAGE du gisement non bâti par taille (≥ 2000 m²)
+--  Nettoyage géométrique RENFORCÉ pour éliminer les artefacts (lignes fines, polygones trop étroits)
+--  Double buffer (-5m puis +5m) : élimine les polygones < 10m de largeur
+--  Cela supprime les corridors étroits le long des routes et autres artefacts visuels
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_nonbati_filtre;
 CREATE TABLE gst_thibaudon_valentin.gisement_nonbati_filtre AS
 SELECT 
-    geom,
+    (ST_Dump(ST_Buffer(ST_Buffer(geom, -5), 5))).geom::geometry(Polygon, 2154) AS geom,
     area_m2 AS surface_m2
 FROM gst_thibaudon_valentin.gnb_brut
-WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -1), 1)) >= 2000;
+WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -5), 5)) >= 2000;
 
 CREATE INDEX idx_gisement_nonbati_filtre_geom ON gst_thibaudon_valentin.gisement_nonbati_filtre USING GIST(geom);
 
@@ -630,7 +680,7 @@ DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_equipement;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gnb_brut;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.plu_u;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.temp_buffer_global;
-DROP TABLE IF EXISTS gst_thibaudon_valentin.tache_urbaine_rnu;
+
 DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_candidates;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.zones_constructibles;
 
