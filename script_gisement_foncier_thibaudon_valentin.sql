@@ -630,7 +630,6 @@ DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_equipement;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gnb_brut;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.plu_u;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.temp_buffer_global;
-DROP TABLE IF EXISTS gst_thibaudon_valentin.communes_rnu;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.tache_urbaine_rnu;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_candidates;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.zones_constructibles;
