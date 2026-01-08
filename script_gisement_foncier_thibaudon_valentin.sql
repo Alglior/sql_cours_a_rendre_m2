@@ -683,6 +683,7 @@ DROP TABLE IF EXISTS gst_thibaudon_valentin.temp_buffer_global;
 
 DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_candidates;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.zones_constructibles;
+DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_bati_infra;
 
 
 
