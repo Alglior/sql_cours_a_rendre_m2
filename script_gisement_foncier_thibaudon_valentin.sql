@@ -119,18 +119,17 @@ FROM (
                 --  Impact modéré sur la constructibilité (bruit, accès)
                 WHEN highway IN ('secondary', 'secondary_link', 'tertiary', 'tertiary_link') THEN 7
                 
-                -- Voies de desserte locale : 4m de recul (voies résidentielles et non classées)
-                --  Circulation locale limitée mais nécessitant un recul minimum
-                WHEN highway IN ('residential', 'unclassified', 'living_street') THEN 4
-                
-                -- Voies piétonnes/cyclables : AUCUN buffer (pas d'impact sur la constructibilité)
-                --  footway : trottoirs et chemins piétonniers
-                --  path : sentiers
-                --  steps : escaliers
-                --  cycleway : pistes cyclables
-                --  pedestrian : zones piétonnes
-                --  platform : quais de transport
-                --  bridleway : chemins équestres
+                -- Voies sans impact sur la constructibilité : AUCUN buffer (0m)
+                --  Ces voies ne génèrent ni nuisances ni contraintes urbanistiques
+                --  footway : trottoirs et chemins piétonniers urbains
+                --  path : sentiers de promenade et chemins non carrossables
+                --  steps : escaliers et gradins (dénivelés importants)
+                --  cycleway : pistes cyclables séparées de la chaussée
+                --  pedestrian : zones piétonnes et rues piétonnières
+                --  platform : quais de transport (bus, tram, train)
+                --  bridleway : chemins équestres et sentiers cavaliers
+                --  track : chemins agricoles, forestiers et d'exploitation (non revêtus)
+                --  service : voies de desserte interne (parkings, zones industrielles, accès privés)
                 WHEN highway IN ('footway', 'path', 'steps', 'cycleway', 'pedestrian', 'platform', 'bridleway', 'track', 'service') THEN 0
                 
                 -- Par défaut (construction, autres) : 1m de sécurité
