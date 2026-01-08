@@ -152,17 +152,7 @@ DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_equipement;
 CREATE TABLE gst_thibaudon_valentin.masque_equipement AS
 
 SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
-    --1. Zones d'activités
-    --  Zones industrielles, commerciales et artisanales déjà affectées à l'économie productive
-    --  Ces espaces ne sont pas disponibles pour du foncier résidentiel ou mixte
-    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
-    FROM geonum_reference.bdtopo_zone_d_activite_ou_d_interet
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
-        AND ST_Dimension(geom) = 2 -- Filtre les géométries de dimension 2 (polygones/surfaces uniquement)
-                                   --  Exclut les points (dimension 0) et les lignes (dimension 1) qui n'ont pas de surface
-                                   --  Garantit qu'on ne crée pas de masque à partir d'une simple coordonnée ponctuelle
 
-    UNION ALL
     --2. Aérodromes
     --  Zone soumise à des servitudes aéronautiques strictes (servitudes T, bruit, dégagement)
     --  Buffer de 100m pour intégrer les contraintes de bruit et de sécurité au-delà de l'emprise
