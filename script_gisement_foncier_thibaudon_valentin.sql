@@ -528,7 +528,7 @@ SELECT
 FROM gst_thibaudon_valentin.gisement_bati_brut
 WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -1), 1)) >= 2000;
 
--- 7.9 RECALCUL DU CES sur les tènements finaux (pas les parcelles d'origine)
+-- 7.9 RECALCUL DU CES sur les tènements(une unité foncière continue) finaux (pas les parcelles d'origine)
 --  C'est le 2ème filtrage CES : on vérifie que le tènement final a bien CES ≤ 0.2
 DROP TABLE IF EXISTS gst_thibaudon_valentin.bati_par_tenement;
 CREATE TABLE gst_thibaudon_valentin.bati_par_tenement AS
