@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+SET client_encoding = 'UTF8';
 --------------------------------------------------------------------------------
 -- TITRE : ANALYSE DU POTENTIEL FONCIER (GISEMENT) - TERRITOIRE CAPI
 -- AUTEUR : Arthur THIBAUDON ; Paul VALENTIN M2 GEO-NUM
