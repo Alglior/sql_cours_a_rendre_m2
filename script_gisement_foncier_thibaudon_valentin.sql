@@ -169,76 +169,106 @@ FROM (
 DROP TABLE IF EXISTS gst_thibaudon_valentin.masque_equipement;
 CREATE TABLE gst_thibaudon_valentin.masque_equipement AS
 
-SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom FROM (
+SELECT 
+    (ST_Dump(ST_Union(geom))).geom::geometry(Polygon, 2154) AS geom 
+FROM (
 
-    --2. Aérodromes
+    -- 2. Aérodromes
     --  Zone soumise à des servitudes aéronautiques strictes (servitudes T, bruit, dégagement)
     --  Buffer de 100m pour intégrer les contraintes de bruit et de sécurité au-delà de l'emprise
-    SELECT ST_Force2D(ST_Buffer(geom,100))::geometry(Geometry, 2154) AS geom
-    FROM geonum_reference.bdtopo_aerodrome
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
+    SELECT 
+        ST_Force2D(ST_Buffer(geom, 100))::geometry(Geometry, 2154) AS geom
+    FROM 
+        geonum_reference.bdtopo_aerodrome
+    WHERE 
+        ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Filtre pour ne conserver que les surfaces (polygones)
                                    --  Évite de créer un buffer circulaire de 100m autour d'un simple point
 
     UNION ALL
-    --2. Cimetières
+
+    -- 2. Cimetières
     --  Domaine public communal affecté au service public funéraire
     --  Non aliénable et soumis à des réglementations sanitaires spécifiques
-    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
-    FROM geonum_reference.bdtopo_cimetiere
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
+    SELECT 
+        ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
+    FROM 
+        geonum_reference.bdtopo_cimetiere
+    WHERE 
+        ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Ne retient que les emprises surfaciques des cimetières
                                    --  Les points de données seraient des localisations approximatives sans emprise réelle
 
     UNION ALL
-    --3. Centres sportifs (Surface seulement)
+
+    -- 3. Centres sportifs (Surface seulement)
     --  Équipements publics dédiés aux activités sportives et de loisirs
     --  Fonction sociale importante : maintien de la santé publique et du lien social
-    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
-    FROM geonum_reference.osm_sport_center
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
+    SELECT 
+        ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
+    FROM 
+        geonum_reference.osm_sport_center
+    WHERE 
+        ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Ne conserve que les surfaces (stades, terrains, complexes sportifs)
                                    --  Exclut les points OSM qui pourraient représenter de petits équipements ponctuels
 
     UNION ALL
-    --4. Parcs
+
+    -- 4. Parcs
     --  Espaces verts urbains assurant des fonctions écologiques (îlots de fraîcheur, biodiversité)
     --  Rôle social (loisirs, détente) et contribution au cadre de vie
     --  Éléments de la trame verte urbaine à préserver dans les documents d'urbanisme
-    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
-    FROM geonum_reference.osm_park
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
+    SELECT 
+        ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
+    FROM 
+        geonum_reference.osm_park
+    WHERE 
+        ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Ne retient que les emprises surfaciques des parcs
                                    --  Évite de masquer une zone entière à partir d'un point d'entrée du parc
 
     UNION ALL
-    --5. Eau
+
+    -- 5. Eau
     --  Plans d'eau, lacs, étangs, zones humides : milieux naturels protégés (SDAGE, Loi sur l'eau)
     --  Risques d'inondation et servitudes d'écoulement des eaux
     --  Préservation de la ressource en eau et des écosystèmes aquatiques
-    SELECT ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
-    FROM geonum_reference.osm_water
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
+    SELECT 
+        ST_Force2D(geom)::geometry(Geometry, 2154) AS geom
+    FROM 
+        geonum_reference.osm_water
+    WHERE 
+        ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Sélection des surfaces en eau uniquement
                                    --  Les points pourraient être des sources, fontaines, sans emprise surfacique significative
 
     UNION ALL
+
     -- 6. Écoles (OSM) avec buffer 1m (alignement petit tampon)
     --  Tampon minimal pour rester proche de l'emprise réelle
-    SELECT ST_Buffer(ST_Force2D(geom), 1)::geometry(Geometry, 2154) AS geom
-    FROM geonum_reference.osm_school
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
+    SELECT 
+        ST_Buffer(ST_Force2D(geom), 1)::geometry(Geometry, 2154) AS geom
+    FROM 
+        geonum_reference.osm_school
+    WHERE 
+        ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Ne prend que les emprises des établissements scolaires (surfaces)
                                    --  Les points seraient des localisations approximatives sans emprise définie
 
     UNION ALL
+
     -- 7. Postes de transformation électrique (OSM) avec buffer 1m (tampon minimal)
-    SELECT ST_Buffer(ST_Force2D(geom), 1)::geometry(Geometry, 2154) AS geom
-    FROM geonum_reference.bdtopo_poste_de_transformation
-    WHERE ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
+    SELECT 
+        ST_Buffer(ST_Force2D(geom), 1)::geometry(Geometry, 2154) AS geom
+    FROM 
+        geonum_reference.bdtopo_poste_de_transformation
+    WHERE 
+        ST_Intersects(geom, (SELECT ST_Union(geom) FROM gst_thibaudon_valentin.communes_epci_capi))
         AND ST_Dimension(geom) = 2 -- Filtre pour ne traiter que les emprises surfaciques
                                    --  Les postes de transformation peuvent être cartographiés en points ou polygones
-) equipements;
+
+) AS equipements;
 
 --------------------------------------------------------------------------------
 -- ETAPE 4 : SÉLECTION DU FONCIER BRUT (PARCELLES)
@@ -432,7 +462,12 @@ DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_candidates;
 CREATE TABLE gst_thibaudon_valentin.parcelles_candidates AS
 SELECT 
     ROW_NUMBER() OVER () AS gid, -- Nouvel identifiant unique pour chaque fragment de parcelle
-    (ST_Dump(ST_Intersection(ST_MakeValid(par.geom), zc.geom))).geom::geometry(Polygon, 2154) AS geom
+    (ST_Dump(
+        ST_Intersection(
+            ST_MakeValid(par.geom), 
+            zc.geom
+        )
+    )).geom::geometry(Polygon, 2154) AS geom
 FROM geonum_reference.parcelles AS par
 INNER JOIN gst_thibaudon_valentin.zones_constructibles AS zc 
     ON ST_Intersects(par.geom, zc.geom);
@@ -495,7 +530,9 @@ SELECT
     c.libgeo AS commune,   -- Nom de la commune
     -- ST_Dump éclate les MultiPolygons en Polygons simples
     --  Chaque fragment de tache urbaine devient une entité géographique indépendante
-    (ST_Dump(ST_Intersection(b.geom, c.geom))).geom::geometry(Polygon, 2154) AS geom
+    (ST_Dump(
+        ST_Intersection(b.geom, c.geom)
+    )).geom::geometry(Polygon, 2154) AS geom
 FROM gst_thibaudon_valentin.temp_buffer_global b
 JOIN gst_thibaudon_valentin.communes_epci_capi AS c ON ST_Intersects(b.geom, c.geom);
 -- NOTE : Pas de GROUP BY car ST_Dump produit déjà plusieurs lignes par commune si fragmentation
@@ -583,20 +620,37 @@ FROM gst_thibaudon_valentin.parcelles_ces_faible;
 DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_sans_lin;
 CREATE TABLE gst_thibaudon_valentin.parcelles_ces_sans_lin AS
 SELECT 
-    ST_Difference(p.geom, COALESCE((SELECT ST_Union(l.geom) FROM gst_thibaudon_valentin.masque_infra AS l), ST_GeomFromText('POLYGON EMPTY', 2154))) AS geom
+    ST_Difference(
+        p.geom, 
+        COALESCE(
+            (SELECT ST_Union(l.geom) FROM gst_thibaudon_valentin.masque_infra AS l), 
+            ST_GeomFromText('POLYGON EMPTY', 2154)
+        )
+    ) AS geom
 FROM gst_thibaudon_valentin.parcelles_ces_union AS p;
 
 -- 7.6 Retrait des équipements
 DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_sans_lin_equip;
 CREATE TABLE gst_thibaudon_valentin.parcelles_ces_sans_lin_equip AS
 SELECT 
-    ST_Difference(p.geom, COALESCE((SELECT ST_Union(e.geom) FROM gst_thibaudon_valentin.masque_equipement AS e), ST_GeomFromText('POLYGON EMPTY', 2154))) AS geom
+    ST_Difference(
+        p.geom, 
+        COALESCE(
+            (SELECT ST_Union(e.geom) FROM gst_thibaudon_valentin.masque_equipement AS e), 
+            ST_GeomFromText('POLYGON EMPTY', 2154)
+        )
+    ) AS geom
 FROM gst_thibaudon_valentin.parcelles_ces_sans_lin AS p;
 
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_brut;
 CREATE TABLE gst_thibaudon_valentin.gisement_bati_brut AS
 SELECT 
-    (ST_Dump(ST_CollectionExtract(ST_Intersection(p.geom, zc.geom), 3))).geom::geometry(Polygon, 2154) AS geom
+    (ST_Dump(
+        ST_CollectionExtract(
+            ST_Intersection(p.geom, zc.geom), 
+            3
+        )
+    )).geom::geometry(Polygon, 2154) AS geom
 FROM gst_thibaudon_valentin.parcelles_ces_sans_lin_equip AS p
 CROSS JOIN (
     SELECT ST_Union(geom) AS geom 
@@ -611,10 +665,18 @@ WHERE ST_Intersects(p.geom, zc.geom);
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_bati_filtre_temp;
 CREATE TABLE gst_thibaudon_valentin.gisement_bati_filtre_temp AS
 SELECT 
-    (ST_Dump(ST_Buffer(ST_Buffer(geom, -5), 5))).geom::geometry(Polygon, 2154) AS geom,
-    ST_Area((ST_Dump(ST_Buffer(ST_Buffer(geom, -5), 5))).geom) AS surface_m2
+    (ST_Dump(
+        ST_Buffer(ST_Buffer(geom, -5), 5)
+    )).geom::geometry(Polygon, 2154) AS geom,
+    ST_Area(
+        (ST_Dump(
+            ST_Buffer(ST_Buffer(geom, -5), 5)
+        )).geom
+    ) AS surface_m2
 FROM gst_thibaudon_valentin.gisement_bati_brut
-WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -5), 5)) >= 2000;
+WHERE ST_Area(
+    ST_Buffer(ST_Buffer(geom, -5), 5)
+) >= 2000;
 
 -- 7.9 RECALCUL DU CES sur les tènements finaux (pas les parcelles d'origine)
 --  C'est le 2ème filtrage CES : on vérifie que le tènement final reste sous le seuil de 0.2
@@ -624,8 +686,16 @@ CREATE TABLE gst_thibaudon_valentin.bati_par_tenement AS
 SELECT 
     t.geom AS geom_tenement,
     t.surface_m2,
-    ST_Intersection(ST_Union(bat.geom), t.geom) AS geom_bati,
-    ST_Area(ST_Intersection(ST_Union(bat.geom), t.geom)) AS surface_bati_m2
+    ST_Intersection(
+        ST_Union(bat.geom), 
+        t.geom
+    ) AS geom_bati,
+    ST_Area(
+        ST_Intersection(
+            ST_Union(bat.geom), 
+            t.geom
+        )
+    ) AS surface_bati_m2
 FROM gst_thibaudon_valentin.gisement_bati_filtre_temp AS t
 INNER JOIN geonum_reference.bdtopo_batiment AS bat 
     ON ST_Intersects(t.geom, bat.geom)
@@ -649,10 +719,14 @@ CREATE INDEX idx_gisement_bati_filtre_geom ON gst_thibaudon_valentin.gisement_ba
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gisement_nonbati_filtre;
 CREATE TABLE gst_thibaudon_valentin.gisement_nonbati_filtre AS
 SELECT 
-    (ST_Dump(ST_Buffer(ST_Buffer(geom, -5), 5))).geom::geometry(Polygon, 2154) AS geom,
+    (ST_Dump(
+        ST_Buffer(ST_Buffer(geom, -5), 5)
+    )).geom::geometry(Polygon, 2154) AS geom,
     area_m2 AS surface_m2
 FROM gst_thibaudon_valentin.gnb_brut
-WHERE ST_Area(ST_Buffer(ST_Buffer(geom, -5), 5)) >= 2000;
+WHERE ST_Area(
+    ST_Buffer(ST_Buffer(geom, -5), 5)
+) >= 2000;
 
 CREATE INDEX idx_gisement_nonbati_filtre_geom ON gst_thibaudon_valentin.gisement_nonbati_filtre USING GIST(geom);
 
