@@ -290,7 +290,7 @@ SELECT (ST_Dump(ST_Union(geom))).geom::geometry(Polygon,2154) AS geom
 FROM gst_thibaudon_valentin.zones_plu;
 
 -- 4.4 Zones constructibles provisoires (seules zones PLU pour l'instant)
--- La tache urbaine RNU sera ajoutée après sa création à l'ÉTAPE 5.3
+-- La tache urbaine RNU sera ajoutée après sa création à l'ÉTAPE 5.4
 DROP TABLE IF EXISTS gst_thibaudon_valentin.zones_constructibles;
 CREATE TABLE gst_thibaudon_valentin.zones_constructibles (
     geom geometry(Polygon, 2154)
@@ -358,9 +358,9 @@ LEFT JOIN (SELECT ST_Union(geom) AS geom FROM gst_thibaudon_valentin.masque_equi
 
 CREATE INDEX idx_temp_buffer_geom ON gst_thibaudon_valentin.temp_buffer_global USING GIST(geom);
 
--- 5.3 RNU (Règlement National d'Urbanisme) : tache urbaine basée UNIQUEMENT sur le BÂTI
+-- 5.3 RNU (Règlement National d'Urbanisme) : tache urbaine basée sur le BÂTI (puis routes ajoutées)
 -- DIFFÉRENCE AVEC PLU : On ne part pas de temp_buffer_global (qui inclut routes + équipements)
--- On crée un buffer +50m/-30m sur les BÂTIMENTS uniquement, puis on ajoute les routes
+-- On crée un buffer +50m/-30m sur les BÂTIMENTS uniquement, puis on ajoute les routes (étape 5.3b)
 -- Cela évite le double-buffer sur les routes qui créerait des artefacts énormes
 DROP TABLE IF EXISTS gst_thibaudon_valentin.tache_urbaine_bati_rnu;
 CREATE TABLE gst_thibaudon_valentin.tache_urbaine_bati_rnu AS
@@ -470,7 +470,7 @@ WHERE ST_Area(geom) > 0;  -- Filtrage des fragments vides
 -- Identification de l'enveloppe urbaine selon la méthode du SCOT (Schéma de Cohérence Territoriale) :
 -- OBJECTIF : Délimiter l'enveloppe de l'urbanisation continue pour mesurer l'étalement urbain
 
--- MÉTHODOLOGIE UNIFIÉE (créée à l'ÉTAPE 4.3) :
+-- MÉTHODOLOGIE UNIFIÉE (créée à l'ÉTAPE 5.2 dans temp_buffer_global) :
 -- 1. Premier buffer de +50m autour des masques combinés (bâti + infra + équipements)
 --     Extension virtuelle pour combler les petits espaces interstitiels
 --     Permet de relier les îlots urbains séparés par de petites coupures (jardins, venelles)
@@ -566,13 +566,13 @@ SELECT
 FROM gst_thibaudon_valentin.parcelles_avec_bati AS p
 INNER JOIN gst_thibaudon_valentin.bati_par_parcelle AS bp 
     ON p.gid = bp.gid
--- Filtre : on garde uniquement les parcelles sous-densifiées (CES réel < 0.2)
+-- Filtre : on garde uniquement les parcelles sous-densifiées (CES réel < 0.20)
 WHERE bp.surface_bati_m2 / p.surface_parcelle_m2 < 0.20;
 
 CREATE INDEX idx_parcelles_ces_faible_geom ON gst_thibaudon_valentin.parcelles_ces_faible USING GIST(geom);
 
 -- 7.4 Fusion des parcelles à faible CES
---  On regroupe toutes les parcelles CES ≤ 0.2 en une seule géométrie
+--  On regroupe toutes les parcelles CES < 0.20 en une seule géométrie
 DROP TABLE IF EXISTS gst_thibaudon_valentin.parcelles_ces_union;
 CREATE TABLE gst_thibaudon_valentin.parcelles_ces_union AS
 SELECT ST_Union(geom) AS geom
@@ -638,7 +638,7 @@ SELECT
     surface_m2,
     surface_bati_m2 / surface_m2 AS ces_reel
 FROM gst_thibaudon_valentin.bati_par_tenement
-WHERE surface_bati_m2 / surface_m2 < 0.20;  -- Filtre avec seuil unique de 0.2
+WHERE surface_bati_m2 / surface_m2 < 0.20;  -- Filtre avec seuil unique de 0.20
 
 CREATE INDEX idx_gisement_bati_filtre_geom ON gst_thibaudon_valentin.gisement_bati_filtre USING GIST(geom);
 
@@ -684,7 +684,8 @@ FROM (
 WHERE ST_Area(geom) > 0;
 
 -- 7.12 Fusion finale des deux types de gisements
---  Création de la couche finale avec les 4 champs attendus
+--  Création de la couche finale avec 3 champs (geom, nature, surface)
+--  Le 4ème champ idgst sera ajouté ensuite via ALTER TABLE
 DROP TABLE IF EXISTS gst_thibaudon_valentin.gst_bati_nonbati;
 CREATE TABLE gst_thibaudon_valentin.gst_bati_nonbati AS
 
