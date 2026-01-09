@@ -694,6 +694,7 @@ SELECT
     'non-bâti' AS nature,
     ST_Area(geom) AS surface
 FROM gst_thibaudon_valentin.gisement_nonbati_final
+WHERE ST_Area(geom) > 2000
 
 UNION ALL
 
@@ -702,7 +703,8 @@ SELECT
     geom,
     'bâti' AS nature,
     ST_Area(geom) AS surface
-FROM gst_thibaudon_valentin.gisement_bati_filtre;
+FROM gst_thibaudon_valentin.gisement_bati_filtre
+WHERE ST_Area(geom) > 2000;
 
 -- Créer un identifiant unique à chaque tènement
 ALTER TABLE gst_thibaudon_valentin.gst_bati_nonbati
